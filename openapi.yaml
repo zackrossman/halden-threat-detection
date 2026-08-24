@@ -1,0 +1,145 @@
+openapi: 3.1.0
+info:
+  title: Halden Threat Detection
+  version: "1.0.0"
+  description: |
+    Serves malware detections raised by Halden's backup scanning pipeline.
+
+    `halden-identity` is the only permitted caller. It validates the end user's
+    access token and forwards the tenant in `X-Halden-Tenant-ID` together with
+    the shared `X-Halden-Gateway-Key`. The service runs in the `halden`
+    namespace on port 8000. See `docs/platform/inbound-request-contract.md`.
+servers:
+  - url: http://halden-threat-detection.halden.svc.cluster.local:8000
+components:
+  parameters:
+    TenantId:
+      name: X-Halden-Tenant-ID
+      in: header
+      required: true
+      description: The tenant the request operates on, set by halden-identity.
+      schema:
+        type: string
+    GatewayKey:
+      name: X-Halden-Gateway-Key
+      in: header
+      required: true
+      description: Shared service-to-service credential presented by halden-identity.
+      schema:
+        type: string
+    RequestId:
+      name: X-Halden-Request-ID
+      in: header
+      required: false
+      description: Telemetry only; carries no authority.
+      schema:
+        type: string
+    ClientVersion:
+      name: X-Halden-Client-Version
+      in: header
+      required: false
+      description: Telemetry only; carries no authority.
+      schema:
+        type: string
+    Locale:
+      name: X-Halden-Locale
+      in: header
+      required: false
+      description: Telemetry only; carries no authority.
+      schema:
+        type: string
+  schemas:
+    Detection:
+      type: object
+      required: [id, resource_name, malware_family, severity, detected_at, status]
+      properties:
+        id:
+          type: string
+        resource_name:
+          type: string
+        malware_family:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        detected_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [quarantined, under_review, remediated]
+    ScanList:
+      type: object
+      required: [tenant_id, detections, summary]
+      properties:
+        tenant_id:
+          type: string
+        detections:
+          type: array
+          items:
+            $ref: '#/components/schemas/Detection'
+        summary:
+          type: object
+          additionalProperties:
+            type: integer
+paths:
+  /v1/scans:
+    get:
+      summary: List detections for the tenant in X-Halden-Tenant-ID
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/GatewayKey'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/Locale'
+      responses:
+        '200':
+          description: Detections for the tenant in X-Halden-Tenant-ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanList'
+        '400':
+          description: X-Halden-Tenant-ID missing
+        '401':
+          description: X-Halden-Gateway-Key missing or invalid
+  /v1/scans/{scan_id}:
+    get:
+      summary: Fetch one detection for the tenant in X-Halden-Tenant-ID
+      parameters:
+        - name: scan_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/TenantId'
+        - $ref: '#/components/parameters/GatewayKey'
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/Locale'
+      responses:
+        '200':
+          description: The detection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detection'
+        '400':
+          description: X-Halden-Tenant-ID missing
+        '401':
+          description: X-Halden-Gateway-Key missing or invalid
+        '404':
+          description: No such detection for this tenant
+  /healthz:
+    get:
+      summary: Liveness and readiness probe
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string

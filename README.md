@@ -42,9 +42,9 @@ The seed loads two tenants, `northwind` and `contoso`.
 `HALDEN_GATEWAY_KEY` and `HALDEN_DATABASE_URL` are both required and have no
 defaults; the service will not start without them. In the cluster they come from
 the `halden-threat-detection-runtime` secret. `HALDEN_ARTIFACT_DIR` needs to be a
-writable path — it is the only directory the service writes to, so the rest of the
-filesystem can be mounted read-only. Extra `HALDEN_`-prefixed variables are
-ignored, so the deployment can pass additional environment metadata.
+writable path; it is the only directory this service's own code writes to. Extra
+`HALDEN_`-prefixed variables are ignored, so the deployment can pass additional
+environment metadata.
 
 ```sh
 curl -H "X-Halden-Tenant-ID: northwind" \

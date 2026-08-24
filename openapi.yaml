@@ -5,28 +5,25 @@ info:
   description: |
     Serves malware detections raised by Halden's backup scanning pipeline.
 
-    `halden-identity` is the only permitted caller. It validates the end user's
-    access token and forwards the tenant in `X-Halden-Tenant-ID` together with
-    the shared `X-Halden-Gateway-Key`. The service runs in the `halden`
-    namespace on port 8000. See `docs/platform/inbound-request-contract.md`.
+    Calls carry a short-lived signed bearer token minted by the platform. The
+    service verifies the token and reads detections for the scope the token
+    carries: a token with `tenant_id` reads that tenant; a token with the
+    `platform:aggregate` scope reads across the estate, which is the scope the
+    nightly rollup runs with. The service runs in the `halden` namespace on
+    port 8000.
 servers:
   - url: http://halden-threat-detection.halden.svc.cluster.local:8000
 components:
+  securitySchemes:
+    internalToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256 token signed with the shared internal secret. Verified for
+        signature, `exp`, `iss` (halden-identity) and `aud`
+        (halden-threat-detection).
   parameters:
-    TenantId:
-      name: X-Halden-Tenant-ID
-      in: header
-      required: true
-      description: The tenant the request operates on, set by halden-identity.
-      schema:
-        type: string
-    GatewayKey:
-      name: X-Halden-Gateway-Key
-      in: header
-      required: true
-      description: Shared service-to-service credential presented by halden-identity.
-      schema:
-        type: string
     RequestId:
       name: X-Halden-Request-ID
       in: header
@@ -53,12 +50,9 @@ components:
       type: object
       required: [id, resource_name, malware_family, severity, detected_at, status]
       properties:
-        id:
-          type: string
-        resource_name:
-          type: string
-        malware_family:
-          type: string
+        id: { type: string }
+        resource_name: { type: string }
+        malware_family: { type: string }
         severity:
           type: string
           enum: [low, medium, high, critical]
@@ -70,10 +64,11 @@ components:
           enum: [quarantined, under_review, remediated]
     ScanList:
       type: object
-      required: [tenant_id, detections, summary]
+      required: [scope, detections, summary]
       properties:
-        tenant_id:
+        scope:
           type: string
+          description: The tenant this response is scoped to, or "estate" for an estate-wide caller.
         detections:
           type: array
           items:
@@ -82,38 +77,75 @@ components:
           type: object
           additionalProperties:
             type: integer
+    ScanSummary:
+      type: object
+      required: [scope, total, by_severity, top_resources]
+      properties:
+        scope:
+          type: string
+          description: The tenant this summary is scoped to, or "estate" for an estate-wide caller.
+        total:
+          type: integer
+        by_severity:
+          type: object
+          additionalProperties:
+            type: integer
+        top_resources:
+          type: array
+          items:
+            type: object
+            properties:
+              tenant_id: { type: string }
+              resource_name: { type: string }
+              malware_family: { type: string }
+security:
+  - internalToken: []
 paths:
   /v1/scans:
     get:
-      summary: List detections for the tenant in X-Halden-Tenant-ID
+      summary: List detections for the caller's scope
       parameters:
-        - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/GatewayKey'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/ClientVersion'
         - $ref: '#/components/parameters/Locale'
       responses:
         '200':
-          description: Detections for the tenant in X-Halden-Tenant-ID
+          description: Detections for the caller's scope
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScanList'
-        '400':
-          description: X-Halden-Tenant-ID missing
         '401':
-          description: X-Halden-Gateway-Key missing or invalid
+          description: Missing or invalid token
+        '403':
+          description: Token carries no read scope
+  /v1/scans/summary:
+    get:
+      summary: Detection totals and recent items for the caller's scope
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/ClientVersion'
+        - $ref: '#/components/parameters/Locale'
+      responses:
+        '200':
+          description: Summary for the caller's scope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanSummary'
+        '401':
+          description: Missing or invalid token
+        '403':
+          description: Token carries no read scope
   /v1/scans/{scan_id}:
     get:
-      summary: Fetch one detection for the tenant in X-Halden-Tenant-ID
+      summary: Fetch one detection within the caller's scope
       parameters:
         - name: scan_id
           in: path
           required: true
           schema:
             type: string
-        - $ref: '#/components/parameters/TenantId'
-        - $ref: '#/components/parameters/GatewayKey'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/ClientVersion'
         - $ref: '#/components/parameters/Locale'
@@ -124,12 +156,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Detection'
-        '400':
-          description: X-Halden-Tenant-ID missing
         '401':
-          description: X-Halden-Gateway-Key missing or invalid
+          description: Missing or invalid token
+        '403':
+          description: Token carries no read scope
         '404':
-          description: No such detection for this tenant
+          description: No such detection within the caller's scope
   /healthz:
     get:
       summary: Liveness and readiness probe

@@ -7,31 +7,43 @@ remediation workflow.
 
 ## Position in the platform
 
-`halden-identity` is the caller. It takes customer traffic, validates the Auth0
-access token, and calls this service with the tenant in `X-Halden-Tenant-ID`
-plus the shared `X-Halden-Gateway-Key`. This service runs in the `halden`
-namespace on port 8000.
+`halden-identity` is the caller: it takes customer traffic, validates the Auth0
+access token, and calls this service with a short-lived signed token. This
+service verifies that token and reads detections for the scope the token
+carries. It runs in the `halden` namespace on port 8000.
 
-The contract both services follow is in
-[docs/platform/inbound-request-contract.md](docs/platform/inbound-request-contract.md).
+## Authentication
+
+Every `/v1` route requires `Authorization: Bearer <token>`. The token is an
+HS256 JWT signed with `HALDEN_INTERNAL_TOKEN_SECRET`; the service checks the
+signature, `exp`, `iss` (`halden-identity`) and `aud` (`halden-threat-detection`)
+before any route runs.
+
+The verified token resolves a read scope:
+
+- a token carrying `tenant_id` reads that tenant's detections;
+- a token carrying the `platform:aggregate` scope reads across the estate — this
+  is the scope the nightly rollup runs with;
+- a token carrying neither is rejected.
+
+`X-Halden-Request-ID`, `X-Halden-Client-Version` and `X-Halden-Locale` are
+forwarded for log correlation and carry no authority.
 
 ## API
 
 | Route | Purpose |
 |---|---|
-| `GET /v1/scans` | Detections for the tenant in `X-Halden-Tenant-ID`, plus counts by severity |
-| `GET /v1/scans/{scan_id}` | One detection, matched on that tenant and the id |
+| `GET /v1/scans` | Detections for the caller's scope, plus counts by severity |
+| `GET /v1/scans/{scan_id}` | One detection within the caller's scope |
+| `GET /v1/scans/summary` | Detection totals and recent items for the caller's scope |
 | `GET /healthz` | Liveness and readiness probe |
 
-`X-Halden-Tenant-ID` and `X-Halden-Gateway-Key` are required on both `/v1/scans`
-routes. `X-Halden-Request-ID`, `X-Halden-Client-Version` and `X-Halden-Locale`
-are forwarded for log correlation and carry no authority. The full schema is in
-[openapi.yaml](openapi.yaml).
+The full schema is in [openapi.yaml](openapi.yaml).
 
 ## Run it
 
 ```sh
-cp .env.example .env          # then set HALDEN_GATEWAY_KEY and HALDEN_DATABASE_URL
+cp .env.example .env          # then set HALDEN_INTERNAL_TOKEN_SECRET and HALDEN_DATABASE_URL
 pip install -r requirements.txt
 python -m scripts.seed        # creates the schema and loads the demo tenants
 uvicorn app.main:app --port 8000
@@ -39,25 +51,18 @@ uvicorn app.main:app --port 8000
 
 The seed loads two tenants, `northwind` and `contoso`.
 
-`HALDEN_GATEWAY_KEY` and `HALDEN_DATABASE_URL` are both required and have no
-defaults; the service will not start without them. In the cluster they come from
-the `halden-threat-detection-runtime` secret. `HALDEN_ARTIFACT_DIR` needs to be a
-writable path; it is the only directory this service's own code writes to. Extra
-`HALDEN_`-prefixed variables are ignored, so the deployment can pass additional
-environment metadata.
-
-```sh
-curl -H "X-Halden-Tenant-ID: northwind" \
-     -H "X-Halden-Gateway-Key: $HALDEN_GATEWAY_KEY" \
-     http://localhost:8000/v1/scans
-```
+`HALDEN_INTERNAL_TOKEN_SECRET` and `HALDEN_DATABASE_URL` are both required and
+have no defaults; the service will not start without them. In the cluster they
+come from the `halden-threat-detection-runtime` secret. `HALDEN_ARTIFACT_DIR`
+needs to be a writable path; it is the only directory this service's own code
+writes to.
 
 In a container:
 
 ```sh
 docker build -t halden/threat-detection:1.0.0 .
 docker run --rm -p 8000:8000 \
-  -e HALDEN_GATEWAY_KEY -e HALDEN_DATABASE_URL \
+  -e HALDEN_INTERNAL_TOKEN_SECRET -e HALDEN_DATABASE_URL \
   halden/threat-detection:1.0.0
 ```
 
@@ -67,14 +72,14 @@ docker run --rm -p 8000:8000 \
 python -m pytest -q
 ```
 
-The suite runs against in-memory SQLite and covers tenant scoping, the gateway
-key check, the summary queries, and the artifact store.
+The suite runs against in-memory SQLite and covers token verification, read
+scoping, the summary route, the reporting counts, and the artifact store.
 
 ## Layout
 
 ```
-app/deps.py              gateway key check and tenant resolution
-app/routers/scans.py     the two tenant-scoped routes
+app/auth.py              token verification and read-scope resolution
+app/routers/scans.py     the detection routes
 app/reporting/summary.py detection counts grouped by an internal dimension
 app/storage/artifacts.py content-addressed artifact store
 scripts/seed.py          demo data for northwind and contoso

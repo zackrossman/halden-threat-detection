@@ -7,15 +7,23 @@ from app.storage.artifacts import ArtifactStore, content_checksum
 
 @pytest.mark.parametrize("dimension", SUMMARY_DIMENSIONS)
 def test_every_allowed_dimension_builds_a_tenant_filtered_query(dimension):
-    sql = build_summary_query(dimension)
+    sql = build_summary_query(dimension, True)
 
     assert f"GROUP BY {dimension}" in sql
     assert "tenant_id = :tenant_id" in sql
 
 
+@pytest.mark.parametrize("dimension", SUMMARY_DIMENSIONS)
+def test_the_estate_wide_query_carries_no_where_clause(dimension):
+    sql = build_summary_query(dimension, False)
+
+    assert f"GROUP BY {dimension}" in sql
+    assert "WHERE" not in sql
+
+
 def test_unknown_dimension_is_refused():
     with pytest.raises(ValueError):
-        build_summary_query("severity; DROP TABLE detections")
+        build_summary_query("severity; DROP TABLE detections", True)
 
 
 def test_summarise_groups_by_the_requested_dimension():
@@ -29,6 +37,11 @@ def test_summarise_groups_by_the_requested_dimension():
             "quarantined": 2,
             "under_review": 1,
         }
+
+
+def test_summarise_without_a_tenant_counts_every_tenant():
+    with session_factory()() as session:
+        assert summarise(session, None) == {"critical": 2, "high": 2, "medium": 2}
 
 
 def test_checksum_is_stable_and_content_dependent():

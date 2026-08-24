@@ -1,4 +1,4 @@
-"""Aggregate counts over a tenant's detections."""
+"""Aggregate counts over detections, for one tenant or across the estate."""
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -9,18 +9,25 @@ from sqlalchemy.orm import Session
 SUMMARY_DIMENSIONS = ("severity", "status", "malware_family")
 
 
-def build_summary_query(dimension: str) -> str:
+def build_summary_query(dimension: str, scoped_to_tenant: bool) -> str:
     if dimension not in SUMMARY_DIMENSIONS:
         raise ValueError(f"unknown summary dimension: {dimension}")
+    where = "WHERE tenant_id = :tenant_id " if scoped_to_tenant else ""
     return (
         f"SELECT {dimension} AS bucket, COUNT(*) AS total "
-        "FROM detections WHERE tenant_id = :tenant_id "
+        f"FROM detections {where}"
         f"GROUP BY {dimension}"
     )
 
 
-def summarise(session: Session, tenant: str, dimension: str = "severity") -> dict[str, int]:
-    rows = session.execute(
-        text(build_summary_query(dimension)), {"tenant_id": tenant}
-    ).all()
+def summarise(
+    session: Session, tenant: str | None, dimension: str = "severity"
+) -> dict[str, int]:
+    """Count detections by `dimension`, for one tenant or for every tenant.
+
+    A `tenant` of None counts across the estate and binds no parameter.
+    """
+    query = build_summary_query(dimension, tenant is not None)
+    params = {"tenant_id": tenant} if tenant is not None else {}
+    rows = session.execute(text(query), params).all()
     return {row.bucket: row.total for row in rows}

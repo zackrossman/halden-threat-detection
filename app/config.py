@@ -8,9 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Settings for halden-threat-detection.
 
-    Every value comes from the environment. The gateway key and the database URL
-    are injected by the platform from the `halden-threat-detection-runtime`
-    Kubernetes secret; neither has a default.
+    Every value comes from the environment. The internal token secret and the
+    database URL are injected by the platform from the
+    `halden-threat-detection-runtime` Kubernetes secret; neither has a default.
 
     Unknown `HALDEN_`-prefixed variables are ignored rather than rejected, so the
     deployment can pass extra environment metadata without stopping the service
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         env_prefix="HALDEN_", env_file=".env", extra="ignore"
     )
 
-    gateway_key: str
+    internal_token_secret: str
     database_url: str
     artifact_dir: str = "/var/lib/halden/artifacts"
 

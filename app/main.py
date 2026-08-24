@@ -6,10 +6,11 @@ from app.routers import scans
 
 app = FastAPI(
     title="Halden Threat Detection",
-    version="1.0.0",
+    version="2.0.0",
     description=(
         "Serves malware detections raised by Halden's backup scanning pipeline. "
-        "Called by halden-identity; see docs/platform/inbound-request-contract.md."
+        "The `/v1` routes read a signed internal token from the `Authorization` "
+        "header. halden-identity is the caller that issues those tokens."
     ),
 )
 

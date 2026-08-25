@@ -47,15 +47,26 @@ def verified_claims(
 
 PLATFORM_AGGREGATE_SCOPE = "platform:aggregate"
 
+# Subjects permitted to present the platform:aggregate scope. The estate-wide
+# read is reserved for the platform's own scheduled principals; a token that
+# carries the scope with any other subject is refused.
+PLATFORM_PRINCIPALS = frozenset({"halden-identity/jobs"})
+
 
 def read_scope(claims: dict) -> str | None:
     """Tenant this caller may read, or None for an estate-wide caller.
 
     Tokens issued for a signed-in customer carry `tenant_id` and are confined
-    to that tenant. Tokens carrying the `platform:aggregate` scope belong to
-    the nightly rollup, which reports across the estate.
+    to that tenant. The `platform:aggregate` scope reports across the estate and
+    is honored only for the platform's own scheduled principals: the subject is
+    checked against the allowlist before estate-wide access is granted.
     """
     if PLATFORM_AGGREGATE_SCOPE in claims.get("scopes", []):
+        if claims.get("sub") not in PLATFORM_PRINCIPALS:
+            raise HTTPException(
+                status_code=403,
+                detail="platform:aggregate scope not permitted for this principal",
+            )
         return None
     tenant = claims.get("tenant_id")
     if not tenant:

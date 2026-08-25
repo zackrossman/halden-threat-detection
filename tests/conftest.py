@@ -80,4 +80,4 @@ def tenant_headers():
 
 @pytest.fixture
 def aggregate_headers():
-    return bearer(make_token({"scopes": [PLATFORM_AGGREGATE_SCOPE]}))
+    return bearer(make_token({"sub": "halden-identity/jobs", "scopes": [PLATFORM_AGGREGATE_SCOPE]}))

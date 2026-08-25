@@ -123,7 +123,7 @@ def test_aggregate_scope_resolves_without_a_tenant_claim(client, aggregate_heade
 def test_read_scope_prefers_the_aggregate_scope_over_a_tenant_claim():
     from app.auth import read_scope
 
-    claims = {"tenant_id": "northwind", "scopes": [PLATFORM_AGGREGATE_SCOPE]}
+    claims = {"sub": "halden-identity/jobs", "tenant_id": "northwind", "scopes": [PLATFORM_AGGREGATE_SCOPE]}
 
     assert read_scope(claims) is None
     assert read_scope({"tenant_id": "northwind"}) == "northwind"
@@ -146,3 +146,23 @@ def test_unknown_halden_env_vars_do_not_break_settings(monkeypatch):
     settings = Settings()
 
     assert settings.internal_token_secret == TOKEN_SECRET
+
+
+def test_aggregate_scope_from_a_foreign_principal_is_refused(client):
+    # A token that carries the estate-wide scope but is not one of the platform's
+    # own scheduled principals must not be granted estate-wide access.
+    token = make_token({"sub": "auth0|northwind-admin", "scopes": [PLATFORM_AGGREGATE_SCOPE]})
+
+    response = client.get("/v1/scans", headers=bearer(token))
+
+    assert response.status_code == 403
+
+
+def test_read_scope_refuses_the_aggregate_scope_for_an_unlisted_subject():
+    from fastapi import HTTPException
+
+    from app.auth import read_scope
+
+    with pytest.raises(HTTPException) as exc:
+        read_scope({"sub": "auth0|northwind-admin", "scopes": [PLATFORM_AGGREGATE_SCOPE]})
+    assert exc.value.status_code == 403

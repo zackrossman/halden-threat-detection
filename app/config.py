@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Settings for halden-threat-detection.
 
-    Every value comes from the environment. The internal token secret and the
+    Every value comes from the environment. The token public key and the
     database URL are injected by the platform from the
     `halden-threat-detection-runtime` Kubernetes secret; neither has a default.
 
@@ -21,11 +21,11 @@ class Settings(BaseSettings):
         env_prefix="HALDEN_", env_file=".env", extra="ignore"
     )
 
-    internal_token_secret: str
-    # PEM public key for the RS256 tokens halden-identity will mint once the
-    # platform is off the shared secret. Empty until then: an RS256 token is
-    # refused rather than trusted while no key is configured.
-    internal_token_public_key: str = ""
+    # PEM public key for the RS256 tokens halden-identity mints. Required and
+    # with no default: the service cannot verify anything without it, so it
+    # fails at startup rather than refusing every request once it is serving.
+    # This is a public key, not a secret.
+    internal_token_public_key: str
     database_url: str
     artifact_dir: str = "/var/lib/halden/artifacts"
     # Ceiling on a single database statement. A caller that asks for an

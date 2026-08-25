@@ -1,17 +1,14 @@
-"""Which signature algorithms this service accepts, and which it must not.
+"""This service accepts RS256 and nothing else.
 
-The platform is migrating from the shared HS256 secret to RS256 signing, so
-both are accepted for now. The risk that comes with accepting two is algorithm
-confusion: an attacker takes the RSA public key, which is not a secret, uses it
-as an HMAC key, and presents the result as HS256.
+That is the property the whole migration exists for. halden-identity holds the
+private key; this service holds only the public half, so an attacker who reads
+everything this service knows — its config, its environment, its pod — still
+cannot mint a token.
 
-Two things refuse that token. PyJWT will not treat a PEM key as an HMAC secret,
-and `verified_claims` picks the key and pins the algorithm in separate branches
-so the public key never reaches the HMAC path. The first is the one doing the
-work today; injecting the naive `algorithms=["HS256", "RS256"]` bug into
-`verified_claims` does not make these tests fail, because PyJWT still catches
-it. The branching is there so the service does not depend on that library
-heuristic, and these tests pin the behaviour whichever layer enforces it.
+Accepting any symmetric algorithm would give that back, because the only key
+this service holds is public. Anyone could sign with it. So every test here is
+a way of asking the same question: can something other than the holder of the
+private key produce a token this service accepts?
 """
 
 import base64
@@ -21,134 +18,101 @@ import json
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app.config import get_settings
-from tests.conftest import TOKEN_ISSUER, TOKEN_AUDIENCE, bearer, make_token
+from app.auth import TOKEN_ALGORITHM
+from tests.conftest import (
+    TOKEN_PUBLIC_KEY,
+    bearer,
+    make_token,
+    other_private_key,
+)
 
 ROUTE = "/v1/scans"
 
-
-@pytest.fixture(scope="module")
-def rsa_keypair() -> tuple[str, str]:
-    """A throwaway RSA keypair, generated per run so no key is checked in."""
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private_pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode()
-    public_pem = (
-        key.public_key()
-        .public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
-    return private_pem, public_pem
+# Far future, so an expiry check is never what refuses these tokens.
+FORGED_CLAIMS_BASE = {
+    "iss": "halden-identity",
+    "aud": "halden-threat-detection",
+    "exp": 4102444800,
+}
 
 
-@pytest.fixture
-def configured_public_key(rsa_keypair, monkeypatch):
-    """Install the public half as the key this service verifies RS256 with."""
-    _, public_pem = rsa_keypair
-    settings = get_settings()
-    monkeypatch.setattr(settings, "internal_token_public_key", public_pem)
-    return public_pem
-
-
-def rs256_token(private_pem: str, claims: dict) -> str:
-    return make_token(claims, secret=private_pem, algorithm="RS256")
-
-
-def hs256_token_signed_by_hand(key: str, claims: dict) -> str:
-    """Build an HS256 token without PyJWT.
+def hmac_token(key: str, claims: dict, algorithm: str = "HS256") -> str:
+    """Build an HMAC-signed token by hand.
 
     PyJWT refuses to *sign* with a PEM key, so an attacker would not use it
-    either. Assembling the token by hand is what the attack looks like, and it
+    either. Assembling the token directly is what the attack looks like, and it
     is the only way to put this service's own verification under test.
     """
+    digest = {"HS256": hashlib.sha256, "HS384": hashlib.sha384, "HS512": hashlib.sha512}[
+        algorithm
+    ]
+
     def segment(data: dict) -> bytes:
         return base64.urlsafe_b64encode(
             json.dumps(data, separators=(",", ":")).encode()
         ).rstrip(b"=")
 
     signing_input = b".".join(
-        [segment({"alg": "HS256", "typ": "JWT"}), segment(claims)]
+        [segment({"alg": algorithm, "typ": "JWT"}), segment(claims)]
     )
-    signature = hmac.new(key.encode(), signing_input, hashlib.sha256).digest()
+    signature = hmac.new(key.encode(), signing_input, digest).digest()
     return (
         signing_input + b"." + base64.urlsafe_b64encode(signature).rstrip(b"=")
     ).decode()
 
 
-FORGED_CLAIMS_BASE = {
-    "iss": TOKEN_ISSUER,
-    "aud": TOKEN_AUDIENCE,
-    "exp": 4102444800,  # far future, so expiry is never what refuses the token
-}
+def test_the_service_accepts_only_rs256():
+    assert TOKEN_ALGORITHM == "RS256"
 
 
-def test_rs256_token_is_accepted_once_the_public_key_is_configured(
-    client, rsa_keypair, configured_public_key
-):
-    private_pem, _ = rsa_keypair
-    token = rs256_token(private_pem, {"tenant_id": "northwind"})
-
-    response = client.get(ROUTE, headers=bearer(token))
+def test_a_token_from_the_real_signing_key_is_accepted(client):
+    response = client.get(ROUTE, headers=bearer(make_token({"tenant_id": "northwind"})))
 
     assert response.status_code == 200
     assert response.json()["scope"] == "northwind"
 
 
-def test_rs256_token_is_refused_while_no_public_key_is_configured(client, rsa_keypair):
-    # The default deployment has no public key yet; an RS256 token must be
-    # turned away rather than trusted.
-    private_pem, _ = rsa_keypair
-    token = rs256_token(private_pem, {"tenant_id": "northwind"})
+def test_a_token_signed_by_another_private_key_is_refused(client):
+    token = make_token({"tenant_id": "northwind"}, key=other_private_key())
 
     assert client.get(ROUTE, headers=bearer(token)).status_code == 401
 
 
-def test_rs256_token_signed_by_another_key_is_refused(client, configured_public_key):
-    other = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    other_pem = other.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode()
-    token = rs256_token(other_pem, {"tenant_id": "northwind"})
-
-    assert client.get(ROUTE, headers=bearer(token)).status_code == 401
+# --- the attacks that a symmetric algorithm would open up ---
 
 
-def test_public_key_used_as_an_hmac_secret_is_refused(client, configured_public_key):
-    """The algorithm-confusion attack this dual-accept window has to survive.
-
-    The public key is not a secret. Signing with it under HS256 must not
-    produce a token this service accepts.
-    """
-    token = hs256_token_signed_by_hand(
-        configured_public_key,
+@pytest.mark.parametrize("algorithm", ["HS256", "HS384", "HS512"])
+def test_the_public_key_used_as_an_hmac_secret_is_refused(client, algorithm):
+    """The public key is not secret. Signing with it must prove nothing."""
+    token = hmac_token(
+        TOKEN_PUBLIC_KEY,
         {"tenant_id": "northwind", "sub": "auth0|attacker", **FORGED_CLAIMS_BASE},
+        algorithm,
     )
 
     assert client.get(ROUTE, headers=bearer(token)).status_code == 401
 
 
-def test_public_key_as_hmac_secret_is_refused_for_the_aggregate_scope(
-    client, configured_public_key
-):
+def test_the_public_key_as_an_hmac_secret_cannot_reach_the_estate(client):
     """The same attack aimed at the estate-wide read, which is the prize."""
-    token = hs256_token_signed_by_hand(
-        configured_public_key,
+    token = hmac_token(
+        TOKEN_PUBLIC_KEY,
         {
             "sub": "halden-identity/jobs",
             "scopes": ["platform:aggregate"],
             **FORGED_CLAIMS_BASE,
         },
+    )
+
+    assert client.get(ROUTE, headers=bearer(token)).status_code == 401
+
+
+def test_an_hs256_token_from_any_secret_is_refused(client):
+    """No shared secret exists any more; nothing signed with one is accepted."""
+    token = hmac_token(
+        "whatever-the-old-shared-secret-was",
+        {"tenant_id": "northwind", "sub": "auth0|attacker", **FORGED_CLAIMS_BASE},
     )
 
     assert client.get(ROUTE, headers=bearer(token)).status_code == 401
@@ -164,7 +128,49 @@ def test_an_unsigned_token_is_refused(client):
     assert client.get(ROUTE, headers=bearer(token)).status_code == 401
 
 
-def test_a_token_naming_an_unaccepted_algorithm_is_refused(client):
-    token = make_token({"tenant_id": "northwind"}, algorithm="HS512")
+def test_a_token_with_no_algorithm_header_is_refused(client):
+    real = make_token({"tenant_id": "northwind"})
+    header, payload, signature = real.split(".")
+    stripped = base64.urlsafe_b64encode(json.dumps({"typ": "JWT"}).encode()).rstrip(b"=")
 
-    assert client.get(ROUTE, headers=bearer(token)).status_code == 401
+    tampered = ".".join([stripped.decode(), payload, signature])
+
+    assert client.get(ROUTE, headers=bearer(tampered)).status_code == 401
+
+
+def test_a_real_token_with_its_header_rewritten_to_hs256_is_refused(client):
+    """Downgrade attempt: keep a genuine payload, claim it was HMAC signed."""
+    real = make_token({"tenant_id": "northwind"})
+    _, payload, signature = real.split(".")
+    downgraded_header = base64.urlsafe_b64encode(
+        json.dumps({"alg": "HS256", "typ": "JWT"}).encode()
+    ).rstrip(b"=")
+
+    tampered = ".".join([downgraded_header.decode(), payload, signature])
+
+    assert client.get(ROUTE, headers=bearer(tampered)).status_code == 401
+
+
+# --- configuration ---
+
+
+def test_the_service_will_not_start_without_a_public_key(monkeypatch):
+    """A missing key must fail at startup, not on every request afterwards.
+
+    The pod then fails its readiness probe and the rollout stops, rather than
+    coming up healthy and refusing all traffic.
+    """
+    import pydantic
+
+    from app.config import Settings
+
+    monkeypatch.delenv("HALDEN_INTERNAL_TOKEN_PUBLIC_KEY", raising=False)
+
+    with pytest.raises(pydantic.ValidationError):
+        Settings(_env_file=None)
+
+
+def test_settings_no_longer_carry_a_shared_secret():
+    from app.config import Settings
+
+    assert "internal_token_secret" not in Settings.model_fields

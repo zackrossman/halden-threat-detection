@@ -19,19 +19,15 @@ the signature, `exp`, `sub`, `iss` (`halden-identity`) and `aud`
 (`halden-threat-detection`) before any route runs. A token that names no
 subject is refused, so every audit record names a caller.
 
-Two signing algorithms are accepted while the platform moves off the shared
-secret:
+Tokens are signed **RS256** with halden-identity's private key and verified
+against the PEM in `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY`. This service holds only
+the public half, so an attacker who reads everything it knows — its config, its
+environment, its pod — still cannot mint a token.
 
-- **HS256**, signed with `HALDEN_INTERNAL_TOKEN_SECRET`. Both services hold the
-  same secret, so anything that can read this service's configuration can also
-  mint tokens.
-- **RS256**, verified against the PEM in `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY`.
-  This service holds only the public half. RS256 tokens are refused while that
-  variable is empty, which is the default.
-
-The `alg` in the token header selects the key, and each branch pins the one
-algorithm its key can verify, so the public key is never used as an HMAC
-secret.
+No symmetric algorithm is accepted, and that is what makes the above true: the
+only key this service holds is public, so an HS256 token verified against it
+could be signed by anyone. The header's `alg` selects nothing; it is read only
+to refuse anything that is not RS256.
 
 The verified token resolves a read scope:
 
@@ -69,7 +65,7 @@ Tokens and secrets are never recorded. See [app/audit.py](app/audit.py).
 ## Run it
 
 ```sh
-cp .env.example .env          # then set HALDEN_INTERNAL_TOKEN_SECRET and HALDEN_DATABASE_URL
+cp .env.example .env          # then set HALDEN_INTERNAL_TOKEN_PUBLIC_KEY and HALDEN_DATABASE_URL
 pip install -r requirements.txt
 python -m scripts.seed        # creates the schema and loads the demo tenants
 uvicorn app.main:app --port 8000
@@ -77,12 +73,13 @@ uvicorn app.main:app --port 8000
 
 The seed loads two tenants, `northwind` and `contoso`.
 
-`HALDEN_INTERNAL_TOKEN_SECRET` and `HALDEN_DATABASE_URL` are both required and
-have no defaults; the service will not start without them. In the cluster they
-come from the `halden-threat-detection-runtime` secret. `HALDEN_ARTIFACT_DIR`
-needs to be a writable path; it is the only directory this service's own code
-writes to. `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY` is optional and empty by default;
-set it to halden-identity's public key to accept RS256 tokens.
+`HALDEN_INTERNAL_TOKEN_PUBLIC_KEY` and `HALDEN_DATABASE_URL` are both required
+and have no defaults; the service will not start without them. A missing public
+key fails at startup rather than refusing every request afterwards, so a
+misconfigured rollout stops at the readiness probe instead of coming up healthy
+and serving 401s. In the cluster both come from the
+`halden-threat-detection-runtime` secret. `HALDEN_ARTIFACT_DIR` needs to be a
+writable path; it is the only directory this service's own code writes to.
 `HALDEN_QUERY_TIMEOUT_MS` bounds a single database statement and defaults to
 5000.
 
@@ -91,7 +88,7 @@ In a container:
 ```sh
 docker build -t halden/threat-detection:1.0.0 .
 docker run --rm -p 8000:8000 \
-  -e HALDEN_INTERNAL_TOKEN_SECRET -e HALDEN_DATABASE_URL \
+  -e HALDEN_INTERNAL_TOKEN_PUBLIC_KEY -e HALDEN_DATABASE_URL \
   halden/threat-detection:1.0.0
 ```
 

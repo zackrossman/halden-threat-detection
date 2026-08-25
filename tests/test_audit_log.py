@@ -13,7 +13,7 @@ from typing import Callable
 
 from app import audit
 from app.db import connect_args
-from tests.conftest import TOKEN_SECRET, bearer, make_token
+from tests.conftest import TOKEN_PUBLIC_KEY, bearer, make_token, other_private_key
 
 
 def capture(action: Callable[[], object]) -> list[dict]:
@@ -136,18 +136,20 @@ def test_the_token_never_appears_in_the_audit_log(client):
 
 
 def test_a_refused_token_is_not_written_to_the_audit_log(client):
-    token = make_token({"tenant_id": "northwind"}, secret=TOKEN_SECRET + "a-different-secret")
+    token = make_token({"tenant_id": "northwind"}, key=other_private_key())
     lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
 
     assert token not in json.dumps(lines)
 
 
-def test_the_signing_secret_never_appears_in_the_audit_log(client, tenant_headers):
+def test_key_material_never_appears_in_the_audit_log(client, tenant_headers):
     lines = capture(
         lambda: client.get("/v1/scans", headers=tenant_headers("northwind"))
     )
 
-    assert TOKEN_SECRET not in json.dumps(lines)
+    rendered = json.dumps(lines)
+    assert TOKEN_PUBLIC_KEY not in rendered
+    assert "PRIVATE KEY" not in rendered
 
 
 def test_postgres_connections_carry_a_statement_timeout():

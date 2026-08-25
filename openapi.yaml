@@ -151,6 +151,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScanList'
+        '400':
+          description: The token's tenant_id claim is not a well-formed tenant id
         '401':
           description: Missing or invalid token
         '403':
@@ -171,6 +173,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScanSummary'
+        '400':
+          description: The token's tenant_id claim is not a well-formed tenant id
         '401':
           description: Missing or invalid token
         '403':
@@ -194,6 +198,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Detection'
+        '400':
+          description: The token's tenant_id claim is not a well-formed tenant id
         '401':
           description: Missing or invalid token
         '403':

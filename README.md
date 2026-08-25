@@ -33,6 +33,12 @@ The `alg` in the token header selects the key, and each branch pins the one
 algorithm its key can verify, so the public key is never used as an HMAC
 secret.
 
+The `tenant_id` claim is checked against `^[a-zA-Z0-9_-]+$` before it is used.
+A verified token proves who minted it, not that the claim is a safe value, and
+the id becomes both a query filter and a directory name in the artifact store.
+The store repeats the check its own way, refusing any tenant id that does not
+resolve to a single directory directly beneath the artifact root.
+
 The verified token resolves a read scope:
 
 - a token carrying `tenant_id` reads that tenant's detections;

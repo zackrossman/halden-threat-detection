@@ -14,6 +14,7 @@ value that is not secret.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -96,6 +97,17 @@ def _decode(token: str, public_key: str) -> dict:
         raise _refuse(401, "invalid token", type(exc).__name__) from None
 
 
+# A tenant id reaches this service inside a verified token, but a verified
+# token only proves who minted it — not that the claim is well formed. The id
+# is used as a query filter and as an artifact path segment, so it is held to a
+# single safe shape here rather than trusted for those uses downstream.
+TENANT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+# How much of a rejected tenant id is recorded. Enough to recognise the attempt,
+# not enough for a long value to bloat the log.
+LOGGED_TENANT_ID_CHARS = 64
+
+
 PLATFORM_AGGREGATE_SCOPE = "platform:aggregate"
 
 # Subjects permitted to present the platform:aggregate scope. The estate-wide
@@ -126,6 +138,14 @@ def read_scope(claims: dict) -> str | None:
     if not tenant:
         raise _refuse(
             403, "token carries no read scope", "no_read_scope", subject=subject
+        )
+    if not isinstance(tenant, str) or not TENANT_ID_PATTERN.match(tenant):
+        raise _refuse(
+            400,
+            "invalid tenant_id format",
+            "malformed_tenant_id",
+            subject=subject,
+            rejected_tenant_id=str(tenant)[:LOGGED_TENANT_ID_CHARS],
         )
     return tenant
 

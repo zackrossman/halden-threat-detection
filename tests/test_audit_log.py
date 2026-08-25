@@ -160,3 +160,66 @@ def test_postgres_connections_carry_a_statement_timeout():
 
 def test_sqlite_connections_take_no_server_options():
     assert connect_args("sqlite+pysqlite:///:memory:") == {}
+
+
+# --- estate-wide reads (MT-003) ---
+
+
+def test_an_estate_wide_list_is_flagged_before_the_query(client, aggregate_headers):
+    lines = capture(lambda: client.get("/v1/scans", headers=aggregate_headers))
+
+    record = only(lines, "estate_wide_read")
+    assert record["level"] == "WARNING"
+    assert record["subject"] == "halden-identity/jobs"
+    assert record["route"] == "/v1/scans"
+
+
+def test_an_estate_wide_summary_is_flagged(client, aggregate_headers):
+    lines = capture(lambda: client.get("/v1/scans/summary", headers=aggregate_headers))
+
+    assert only(lines, "estate_wide_read")["route"] == "/v1/scans/summary"
+
+
+def test_an_estate_wide_fetch_is_flagged_with_the_detection_id(client, aggregate_headers):
+    lines = capture(
+        lambda: client.get("/v1/scans/scan_nw_0001", headers=aggregate_headers)
+    )
+
+    record = only(lines, "estate_wide_read")
+    assert record["route"] == "/v1/scans/{scan_id}"
+    assert record["detection_id"] == "scan_nw_0001"
+
+
+def test_a_tenant_scoped_read_is_not_flagged_as_estate_wide(client, tenant_headers):
+    """The signal is only useful if per-tenant reads stay out of it."""
+    lines = capture(lambda: client.get("/v1/scans", headers=tenant_headers("northwind")))
+
+    assert [line for line in lines if line["event"] == "estate_wide_read"] == []
+
+
+def test_the_flag_is_recorded_even_when_the_read_returns_nothing(client, aggregate_headers):
+    lines = capture(
+        lambda: client.get("/v1/scans?offset=500", headers=aggregate_headers)
+    )
+
+    assert only(lines, "estate_wide_read")["route"] == "/v1/scans"
+
+
+def test_a_malformed_tenant_is_recorded_with_its_rejected_value(client):
+    token = make_token({"tenant_id": "../contoso"}, subject="auth0|attacker")
+    lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
+
+    record = only(lines, "authorization_denied")
+    assert record["reason"] == "malformed_tenant_id"
+    assert record["subject"] == "auth0|attacker"
+    assert record["rejected_tenant_id"] == "../contoso"
+
+
+def test_a_long_malformed_tenant_is_truncated_in_the_log(client):
+    from app.auth import LOGGED_TENANT_ID_CHARS
+
+    token = make_token({"tenant_id": "../" + "a" * 500})
+    lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
+
+    recorded = only(lines, "authorization_denied")["rejected_tenant_id"]
+    assert len(recorded) == LOGGED_TENANT_ID_CHARS

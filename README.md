@@ -79,8 +79,11 @@ default only so the service can be deployed before certificates exist.
 
 ## Audit log
 
-Authentication failures, refused scopes and every read are written to stdout as
-one JSON object per line, which is what the cluster's log shipper collects.
+Verified tokens, authentication failures, refused scopes and every read are
+written to stdout as one JSON object per line, which is what the cluster's log
+shipper collects. Both ends of a credential's use are recorded, not just the
+refusals: `token_verified` when a token is accepted, and the read it then
+performed.
 Each record names the caller's `subject` and the `scope` the read ran under.
 Tokens and secrets are never recorded. See [app/audit.py](app/audit.py).
 

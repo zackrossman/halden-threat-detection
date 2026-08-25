@@ -5,12 +5,12 @@ the token, and this module checks the signature and the registered claims
 before any route runs. Once the token is verified, `read_scope` works out how
 much of the detection data the caller is asking for.
 
-Two signature algorithms are accepted while the platform moves off the shared
-secret. The `alg` in the token header selects which key verifies the token, and
-each branch pins the single algorithm its key can verify, so a token is never
-checked against the wrong kind of key. In particular the RSA public key is
-never handed to the HMAC path, where an attacker could sign with the public key
-as the shared secret and have it accepted.
+Tokens are signed RS256 with halden-identity's private key. This service holds
+only the matching public key, so nothing in its configuration or its pod can
+mint a token: an attacker who reads everything this service knows still cannot
+forge one. No symmetric algorithm is accepted, which is what makes that true —
+an HS256 token verified against the public key would let anyone sign with a
+value that is not secret.
 """
 
 import logging
@@ -26,13 +26,10 @@ from app.config import get_settings
 TOKEN_ISSUER = "halden-identity"
 TOKEN_AUDIENCE = "halden-threat-detection"
 
-# Signed with the shared secret. The platform is migrating away from this.
-SYMMETRIC_ALGORITHM = "HS256"
-# Signed with halden-identity's private key; this service holds only the public
-# half, so reading this service's configuration does not let anyone mint tokens.
-ASYMMETRIC_ALGORITHM = "RS256"
-
-TOKEN_ALGORITHM = SYMMETRIC_ALGORITHM  # retained for callers that name the default
+# The only algorithm this service accepts. halden-identity signs with the
+# private half; this service holds only the public key, so reading its
+# configuration does not let anyone mint a token.
+TOKEN_ALGORITHM = "RS256"
 
 # `sub` is required so that every audit record names a caller. halden-identity
 # sets it on both the customer and the platform token.
@@ -73,30 +70,22 @@ def verified_claims(
     except jwt.PyJWTError:
         raise _refuse(401, "invalid token", "unreadable_header") from None
 
-    settings = get_settings()
-
-    # Each branch names its algorithm literally rather than passing the header
-    # value through, so the header can select a branch but can never widen the
-    # set of algorithms a key is trusted for.
-    if algorithm == ASYMMETRIC_ALGORITHM:
-        public_key = settings.internal_token_public_key
-        if not public_key:
-            raise _refuse(401, "invalid token", "rs256_key_not_configured")
-        claims = _decode(token, public_key, ASYMMETRIC_ALGORITHM)
-    elif algorithm == SYMMETRIC_ALGORITHM:
-        claims = _decode(token, settings.internal_token_secret, SYMMETRIC_ALGORITHM)
-    else:
+    # The header selects nothing. It is read only to refuse anything that is
+    # not RS256 with a reason worth logging; the algorithm passed to the
+    # decoder is the constant below, never the header value, so a token cannot
+    # nominate how it would like to be verified.
+    if algorithm != TOKEN_ALGORITHM:
         raise _refuse(401, "invalid token", "unsupported_algorithm")
 
-    return claims
+    return _decode(token, get_settings().internal_token_public_key)
 
 
-def _decode(token: str, key: str, algorithm: str) -> dict:
+def _decode(token: str, public_key: str) -> dict:
     try:
         return jwt.decode(
             token,
-            key,
-            algorithms=[algorithm],
+            public_key,
+            algorithms=[TOKEN_ALGORITHM],
             issuer=TOKEN_ISSUER,
             audience=TOKEN_AUDIENCE,
             options={"require": REQUIRED_CLAIMS},

@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from app.auth import PLATFORM_AGGREGATE_SCOPE
-from tests.conftest import TOKEN_SECRET, bearer, make_token
+from tests.conftest import bearer, make_token, other_private_key
 
 PROTECTED_ROUTES = ["/v1/scans", "/v1/scans/summary", "/v1/scans/scan_nw_0001"]
 
@@ -32,8 +32,8 @@ def test_garbage_instead_of_a_token_is_a_401(client):
     assert response.status_code == 401
 
 
-def test_token_signed_with_another_secret_is_a_401(client):
-    token = make_token({"tenant_id": "northwind"}, secret=TOKEN_SECRET + "x")
+def test_token_signed_with_another_key_is_a_401(client):
+    token = make_token({"tenant_id": "northwind"}, key=other_private_key())
 
     response = client.get("/v1/scans", headers=bearer(token))
 
@@ -139,13 +139,14 @@ def test_healthz_needs_no_token(client):
 def test_unknown_halden_env_vars_do_not_break_settings(monkeypatch):
     """The deployment may pass extra HALDEN_* metadata; it must not stop startup."""
     from app.config import Settings
+    from tests.conftest import TOKEN_PUBLIC_KEY
 
     monkeypatch.setenv("HALDEN_ENV", "alpha")
     monkeypatch.setenv("HALDEN_SERVICE_NAME", "halden-threat-detection")
 
     settings = Settings()
 
-    assert settings.internal_token_secret == TOKEN_SECRET
+    assert settings.internal_token_public_key == TOKEN_PUBLIC_KEY
 
 
 def test_aggregate_scope_from_a_foreign_principal_is_refused(client):

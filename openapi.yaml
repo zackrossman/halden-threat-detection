@@ -24,10 +24,9 @@ components:
         `exp`, `sub`, `iss` (halden-identity) and `aud`
         (halden-threat-detection).
 
-        Two signing algorithms are accepted while the platform migrates off the
-        shared secret: HS256 signed with `HALDEN_INTERNAL_TOKEN_SECRET`, and
-        RS256 verified against `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY`. RS256 is
-        refused until that public key is configured.
+        Signed RS256 with halden-identity's private key and verified against
+        `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY`. This service holds only the public
+        half and cannot mint a token. No symmetric algorithm is accepted.
   parameters:
     Limit:
       name: limit

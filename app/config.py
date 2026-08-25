@@ -3,7 +3,7 @@
 from functools import lru_cache
 from urllib.parse import parse_qs, urlsplit
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Postgres `sslmode` values that leave the connection unencrypted, or let the
@@ -35,6 +35,37 @@ class Settings(BaseSettings):
     # This is a public key, not a secret.
     internal_token_public_key: str
     database_url: str
+
+    @model_validator(mode="after")
+    def tls_settings_are_complete(self) -> "Settings":
+        """A half-configured listener must not fall back to plaintext.
+
+        A cert without a key, or a key without a cert, is a deployment that
+        meant to serve TLS. Starting anyway on plain HTTP would put tokens on
+        the wire in exactly the case someone was trying to prevent, and it
+        would look like it worked.
+
+        Requiring client certificates without serving TLS is likewise refused:
+        there is no handshake to present a client certificate in.
+        """
+        if bool(self.tls_cert_file) != bool(self.tls_key_file):
+            raise ValueError(
+                "HALDEN_TLS_CERT_FILE and HALDEN_TLS_KEY_FILE must be set together"
+            )
+        if self.tls_client_ca_file and not self.tls_cert_file:
+            raise ValueError(
+                "HALDEN_TLS_CLIENT_CA_FILE requires TLS; set "
+                "HALDEN_TLS_CERT_FILE and HALDEN_TLS_KEY_FILE"
+            )
+        return self
+
+    @property
+    def tls_enabled(self) -> bool:
+        return bool(self.tls_cert_file and self.tls_key_file)
+
+    @property
+    def mutual_tls_enabled(self) -> bool:
+        return bool(self.tls_client_ca_file)
 
     @field_validator("database_url")
     @classmethod
@@ -69,6 +100,24 @@ class Settings(BaseSettings):
         return url
 
     artifact_dir: str = "/var/lib/halden/artifacts"
+
+    # Where the service listens, and whether it does so over TLS.
+    #
+    # Traffic to this service crosses the cluster network carrying bearer
+    # tokens in the Authorization header. Plaintext HTTP puts those tokens in
+    # front of anything that can watch pod-to-pod traffic, which is the whole
+    # of TA-3.1. Setting a cert and key moves the listener to TLS.
+    #
+    # Both are empty by default so the service can be deployed before
+    # certificates exist, and so the tests need none.
+    listen_host: str = "0.0.0.0"
+    listen_port: int = 8000
+    tls_cert_file: str = ""
+    tls_key_file: str = ""
+    # PEM bundle of the CA that signs client certificates. Setting it turns on
+    # mutual TLS: a caller without a certificate this CA signed is refused at
+    # the handshake, before any request is read.
+    tls_client_ca_file: str = ""
     # Ceiling on a single database statement. A caller that asks for an
     # expensive read gets an error rather than holding a connection open and
     # starving everyone else.

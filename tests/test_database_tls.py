@@ -71,3 +71,45 @@ def test_the_url_is_not_rewritten_when_it_is_already_safe():
     url = "postgresql+psycopg://u:p@h:5432/halden?sslmode=verify-full&application_name=halden"
 
     assert settings_for(url).database_url == url
+
+
+# --- listener TLS configuration (MT-005) ---
+
+
+def test_a_certificate_without_a_key_is_refused():
+    """A half-configured listener must not silently fall back to plaintext."""
+    with pytest.raises(ValueError):
+        Settings(
+            internal_token_public_key=PUBLIC_KEY,
+            database_url="sqlite+pysqlite:///:memory:",
+            tls_cert_file="/tls/server.crt",
+            _env_file=None,
+        )
+
+
+def test_a_key_without_a_certificate_is_refused():
+    with pytest.raises(ValueError):
+        Settings(
+            internal_token_public_key=PUBLIC_KEY,
+            database_url="sqlite+pysqlite:///:memory:",
+            tls_key_file="/tls/server.key",
+            _env_file=None,
+        )
+
+
+def test_client_ca_without_tls_is_refused():
+    """There is no handshake to present a client certificate in."""
+    with pytest.raises(ValueError):
+        Settings(
+            internal_token_public_key=PUBLIC_KEY,
+            database_url="sqlite+pysqlite:///:memory:",
+            tls_client_ca_file="/tls/ca.crt",
+            _env_file=None,
+        )
+
+
+def test_tls_is_off_by_default():
+    settings = settings_for("sqlite+pysqlite:///:memory:")
+
+    assert settings.tls_enabled is False
+    assert settings.mutual_tls_enabled is False

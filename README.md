@@ -89,6 +89,12 @@ writable path; it is the only directory this service's own code writes to.
 `HALDEN_QUERY_TIMEOUT_MS` bounds a single database statement and defaults to
 5000.
 
+`HALDEN_DATABASE_URL` must carry `sslmode=require` or stronger when it points at
+Postgres. Detection records cross the cluster network, and libpq's default
+(`prefer`) downgrades to an unencrypted connection without reporting it, so the
+service refuses to start on a URL that permits plaintext rather than running
+unencrypted.
+
 In a container:
 
 ```sh

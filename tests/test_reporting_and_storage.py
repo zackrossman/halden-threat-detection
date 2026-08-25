@@ -72,3 +72,36 @@ def test_artifacts_are_separated_by_tenant(tmp_path):
     assert northwind != contoso
     assert northwind.parent.name == "northwind"
     assert contoso.parent.name == "contoso"
+
+
+def test_request_data_never_reaches_the_statement_text():
+    """The group-by column can only ever be one of the names in this module.
+
+    The dimension is embedded in the SQL text rather than bound, so the
+    allowlist is what stands between it and injection. Nothing reachable from a
+    request supplies it today, and this test keeps the check in place if
+    something ever does.
+    """
+    for injection in (
+        "severity; DROP TABLE detections",
+        "severity UNION SELECT tenant_id FROM detections",
+        "1) OR (1=1",
+        "",
+    ):
+        with pytest.raises(ValueError):
+            build_summary_query(injection, True)
+
+
+def test_the_tenant_is_bound_rather_than_interpolated():
+    """A tenant claim is attacker-influenced, so it must never be in the text."""
+    sql = build_summary_query("severity", True)
+
+    assert ":tenant_id" in sql
+    assert "northwind" not in sql
+
+
+def test_a_malicious_tenant_claim_matches_nothing_rather_than_injecting():
+    with session_factory()() as session:
+        counts = summarise(session, "northwind' OR '1'='1")
+
+    assert counts == {}

@@ -12,10 +12,23 @@ _engine = None
 _SessionLocal: sessionmaker | None = None
 
 
+def connect_args(database_url: str) -> dict:
+    """Driver options for this database URL.
+
+    Postgres takes the statement timeout as a server option on the connection,
+    so every statement on it is bounded without each call site remembering to
+    ask. SQLite, which the tests run on, has no such option and gets none.
+    """
+    if database_url.startswith("postgresql"):
+        return {"options": f"-c statement_timeout={get_settings().query_timeout_ms}"}
+    return {}
+
+
 def engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+        url = get_settings().database_url
+        _engine = create_engine(url, pool_pre_ping=True, connect_args=connect_args(url))
     return _engine
 
 

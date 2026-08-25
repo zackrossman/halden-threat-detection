@@ -2,7 +2,10 @@
 
 from fastapi import FastAPI
 
+from app.audit import configure_audit_logging
 from app.routers import scans
+
+configure_audit_logging()
 
 app = FastAPI(
     title="Halden Threat Detection",

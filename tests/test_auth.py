@@ -166,3 +166,21 @@ def test_read_scope_refuses_the_aggregate_scope_for_an_unlisted_subject():
     with pytest.raises(HTTPException) as exc:
         read_scope({"sub": "auth0|northwind-admin", "scopes": [PLATFORM_AGGREGATE_SCOPE]})
     assert exc.value.status_code == 403
+
+
+def test_token_without_a_subject_is_a_401(client):
+    # Every audit record names the caller, so a token that names no subject is
+    # not usable. halden-identity sets `sub` on both token kinds it mints.
+    token = make_token({"tenant_id": "northwind"}, subject=None)
+
+    response = client.get("/v1/scans", headers=bearer(token))
+
+    assert response.status_code == 401
+
+
+def test_aggregate_token_without_a_subject_is_a_401(client):
+    token = make_token({"scopes": [PLATFORM_AGGREGATE_SCOPE]}, subject=None)
+
+    response = client.get("/v1/scans", headers=bearer(token))
+
+    assert response.status_code == 401

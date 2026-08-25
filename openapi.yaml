@@ -20,10 +20,34 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        HS256 token signed with the shared internal secret. Verified for
-        signature, `exp`, `iss` (halden-identity) and `aud`
+        Short-lived token minted by halden-identity. Verified for signature,
+        `exp`, `sub`, `iss` (halden-identity) and `aud`
         (halden-threat-detection).
+
+        Two signing algorithms are accepted while the platform migrates off the
+        shared secret: HS256 signed with `HALDEN_INTERNAL_TOKEN_SECRET`, and
+        RS256 verified against `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY`. RS256 is
+        refused until that public key is configured.
   parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: How many detections to return. Defaults to 100.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+    Offset:
+      name: offset
+      in: query
+      required: false
+      description: How many detections to skip, for walking through the pages.
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
     RequestId:
       name: X-Halden-Request-ID
       in: header
@@ -64,19 +88,29 @@ components:
           enum: [quarantined, under_review, remediated]
     ScanList:
       type: object
-      required: [scope, detections, summary]
+      required: [scope, detections, summary, limit, offset, total]
       properties:
         scope:
           type: string
           description: The tenant this response is scoped to, or "estate" for an estate-wide caller.
         detections:
           type: array
+          description: One page of detections, newest first.
           items:
             $ref: '#/components/schemas/Detection'
         summary:
           type: object
           additionalProperties:
             type: integer
+        limit:
+          type: integer
+          description: The page size this response used.
+        offset:
+          type: integer
+          description: How many detections were skipped.
+        total:
+          type: integer
+          description: Detections in the caller's scope altogether, not just this page.
     ScanSummary:
       type: object
       required: [scope, total, by_severity, top_resources]
@@ -105,6 +139,8 @@ paths:
     get:
       summary: List detections for the caller's scope
       parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/ClientVersion'
         - $ref: '#/components/parameters/Locale'
@@ -119,6 +155,8 @@ paths:
           description: Missing or invalid token
         '403':
           description: Token carries no read scope
+        '422':
+          description: limit or offset is outside its allowed range
   /v1/scans/summary:
     get:
       summary: Detection totals and recent items for the caller's scope

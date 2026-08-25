@@ -22,8 +22,16 @@ class Settings(BaseSettings):
     )
 
     internal_token_secret: str
+    # PEM public key for the RS256 tokens halden-identity will mint once the
+    # platform is off the shared secret. Empty until then: an RS256 token is
+    # refused rather than trusted while no key is configured.
+    internal_token_public_key: str = ""
     database_url: str
     artifact_dir: str = "/var/lib/halden/artifacts"
+    # Ceiling on a single database statement. A caller that asks for an
+    # expensive read gets an error rather than holding a connection open and
+    # starving everyone else.
+    query_timeout_ms: int = 5000
 
 
 @lru_cache

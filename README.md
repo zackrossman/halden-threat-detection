@@ -14,10 +14,24 @@ carries. It runs in the `halden` namespace on port 8000.
 
 ## Authentication
 
-Every `/v1` route requires `Authorization: Bearer <token>`. The token is an
-HS256 JWT signed with `HALDEN_INTERNAL_TOKEN_SECRET`; the service checks the
-signature, `exp`, `iss` (`halden-identity`) and `aud` (`halden-threat-detection`)
-before any route runs.
+Every `/v1` route requires `Authorization: Bearer <token>`. The service checks
+the signature, `exp`, `sub`, `iss` (`halden-identity`) and `aud`
+(`halden-threat-detection`) before any route runs. A token that names no
+subject is refused, so every audit record names a caller.
+
+Two signing algorithms are accepted while the platform moves off the shared
+secret:
+
+- **HS256**, signed with `HALDEN_INTERNAL_TOKEN_SECRET`. Both services hold the
+  same secret, so anything that can read this service's configuration can also
+  mint tokens.
+- **RS256**, verified against the PEM in `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY`.
+  This service holds only the public half. RS256 tokens are refused while that
+  variable is empty, which is the default.
+
+The `alg` in the token header selects the key, and each branch pins the one
+algorithm its key can verify, so the public key is never used as an HMAC
+secret.
 
 The verified token resolves a read scope:
 
@@ -33,12 +47,24 @@ forwarded for log correlation and carry no authority.
 
 | Route | Purpose |
 |---|---|
-| `GET /v1/scans` | Detections for the caller's scope, plus counts by severity |
+| `GET /v1/scans` | One page of detections for the caller's scope, plus counts by severity |
 | `GET /v1/scans/{scan_id}` | One detection within the caller's scope |
 | `GET /v1/scans/summary` | Detection totals and recent items for the caller's scope |
 | `GET /healthz` | Liveness and readiness probe |
 
+`GET /v1/scans` returns a page at a time. `limit` defaults to 100 and cannot
+exceed 1000; `offset` walks through the pages. The response repeats the `limit`
+and `offset` it used and reports `total`, the number of detections in the
+caller's scope altogether, so a caller knows whether to ask for more.
+
 The full schema is in [openapi.yaml](openapi.yaml).
+
+## Audit log
+
+Authentication failures, refused scopes and every read are written to stdout as
+one JSON object per line, which is what the cluster's log shipper collects.
+Each record names the caller's `subject` and the `scope` the read ran under.
+Tokens and secrets are never recorded. See [app/audit.py](app/audit.py).
 
 ## Run it
 
@@ -55,7 +81,10 @@ The seed loads two tenants, `northwind` and `contoso`.
 have no defaults; the service will not start without them. In the cluster they
 come from the `halden-threat-detection-runtime` secret. `HALDEN_ARTIFACT_DIR`
 needs to be a writable path; it is the only directory this service's own code
-writes to.
+writes to. `HALDEN_INTERNAL_TOKEN_PUBLIC_KEY` is optional and empty by default;
+set it to halden-identity's public key to accept RS256 tokens.
+`HALDEN_QUERY_TIMEOUT_MS` bounds a single database statement and defaults to
+5000.
 
 In a container:
 
@@ -79,6 +108,7 @@ scoping, the summary route, the reporting counts, and the artifact store.
 
 ```
 app/auth.py              token verification and read-scope resolution
+app/audit.py             structured audit records
 app/routers/scans.py     the detection routes
 app/reporting/summary.py detection counts grouped by an internal dimension
 app/storage/artifacts.py content-addressed artifact store

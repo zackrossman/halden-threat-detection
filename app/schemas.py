@@ -32,6 +32,11 @@ class ScanListOut(BaseModel):
     scope: str
     detections: list[DetectionOut]
     summary: dict[str, int]
+    # The page this response covers, and how many detections are in scope
+    # altogether, so a caller knows whether to ask for the next page.
+    limit: int
+    offset: int
+    total: int
 
 
 class ScanSummaryOut(BaseModel):

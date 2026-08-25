@@ -223,3 +223,51 @@ def test_a_long_malformed_tenant_is_truncated_in_the_log(client):
 
     recorded = only(lines, "authorization_denied")["rejected_tenant_id"]
     assert len(recorded) == LOGGED_TENANT_ID_CHARS
+
+
+# --- token lifecycle (MT-004) ---
+
+
+def test_a_verified_token_is_recorded(client):
+    token = make_token({"tenant_id": "northwind"}, subject="auth0|nw-analyst")
+    lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
+
+    record = only(lines, "token_verified")
+    assert record["subject"] == "auth0|nw-analyst"
+    assert record["issuer"] == "halden-identity"
+    assert record["audience"] == "halden-threat-detection"
+    assert record["algorithm"] == "RS256"
+
+
+def test_the_platform_token_verification_is_recorded(client, aggregate_headers):
+    lines = capture(lambda: client.get("/v1/scans", headers=aggregate_headers))
+
+    assert only(lines, "token_verified")["subject"] == "halden-identity/jobs"
+
+
+def test_a_refused_token_is_not_recorded_as_verified(client):
+    """A refusal counted as an acceptance would make the log worse than none."""
+    token = make_token({"tenant_id": "northwind"}, key=other_private_key())
+    lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
+
+    assert [line for line in lines if line["event"] == "token_verified"] == []
+    assert only(lines, "authentication_failed")
+
+
+def test_the_verified_token_never_appears_in_its_own_record(client):
+    token = make_token({"tenant_id": "northwind"}, subject="auth0|nw-analyst")
+    lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
+
+    rendered = json.dumps(lines)
+    assert token not in rendered
+    assert token.rsplit(".", 1)[-1] not in rendered
+
+
+def test_verification_and_access_are_both_recorded(client):
+    """The pair is the point: a credential accepted, and what it then read."""
+    token = make_token({"tenant_id": "northwind"}, subject="auth0|nw-analyst")
+    lines = capture(lambda: client.get("/v1/scans", headers=bearer(token)))
+
+    events = [line["event"] for line in lines]
+    assert "token_verified" in events
+    assert "detections_listed" in events

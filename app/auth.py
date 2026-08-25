@@ -78,7 +78,20 @@ def verified_claims(
     if algorithm != TOKEN_ALGORITHM:
         raise _refuse(401, "invalid token", "unsupported_algorithm")
 
-    return _decode(token, get_settings().internal_token_public_key)
+    claims = _decode(token, get_settings().internal_token_public_key)
+
+    # Recording only refusals answers "who was turned away" and not "who got
+    # in", which is where an investigation starts. The token is never recorded
+    # — the registered claims say who presented it and who signed it, without
+    # putting a usable credential in the log.
+    audit.record(
+        "token_verified",
+        subject=claims.get("sub"),
+        issuer=claims.get("iss"),
+        audience=claims.get("aud"),
+        algorithm=TOKEN_ALGORITHM,
+    )
+    return claims
 
 
 def _decode(token: str, public_key: str) -> dict:

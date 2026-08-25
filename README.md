@@ -61,6 +61,22 @@ caller's scope altogether, so a caller knows whether to ask for more.
 
 The full schema is in [openapi.yaml](openapi.yaml).
 
+## Transport
+
+The service listens on `HALDEN_LISTEN_PORT` (8000 by default). Setting
+`HALDEN_TLS_CERT_FILE` and `HALDEN_TLS_KEY_FILE` moves the listener to TLS,
+conventionally on 8443. Both must be set together; one without the other is
+refused at startup rather than falling back to plaintext, because a deployment
+that set one meant to encrypt.
+
+Setting `HALDEN_TLS_CLIENT_CA_FILE` additionally turns on mutual TLS. A caller
+without a certificate signed by that CA is refused at the handshake, before any
+request is read.
+
+Requests carry bearer tokens in the `Authorization` header, so an unencrypted
+hop exposes them to anything that can watch pod-to-pod traffic. TLS is off by
+default only so the service can be deployed before certificates exist.
+
 ## Audit log
 
 Authentication failures, refused scopes and every read are written to stdout as

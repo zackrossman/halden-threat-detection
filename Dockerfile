@@ -17,6 +17,10 @@ RUN useradd --system --uid 10001 --create-home halden \
 
 USER halden
 
-EXPOSE 8000
+# 8000 serves plaintext, 8443 serves TLS. Which one is live depends on whether
+# HALDEN_TLS_CERT_FILE and HALDEN_TLS_KEY_FILE are set, so both are declared.
+EXPOSE 8000 8443
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# The listener is assembled from settings rather than from flags here, because
+# the TLS arguments are conditional and a shell should not be deciding them.
+CMD ["python", "-m", "app.serve"]
